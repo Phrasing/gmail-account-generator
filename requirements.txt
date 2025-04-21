@@ -1,0 +1,4 @@
+# Project dependencies will be listed here
+nodriver
+requests
+names

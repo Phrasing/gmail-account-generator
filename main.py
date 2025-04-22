@@ -19,6 +19,7 @@ DAISY_SERVICE = os.getenv("DAISY_SERVICE", "service_code_here")
 DELAY_FACTOR = float(os.getenv("DELAY_FACTOR", "1.0"))
 CATCHALL_DOMAIN = os.getenv("CATCHALL_DOMAIN")
 RECOVERY_EMAIL = os.getenv("RECOVERY_EMAIL")
+CREATION_DELAY = float(os.getenv("CREATION_DELAY", "30"))  # time between account creations in seconds
 
 
 async def apply_delay(duration):
@@ -424,9 +425,9 @@ async def create_gmail_account(email_to_create, recovery_email, first_name, last
         
         logger.info("accept_terms")
         await accept_terms(tab)
+
+        await apply_delay(CREATION_DELAY)
         
-        logger.info("applying final delay")
-        await apply_delay(5)
         return "success"
     except Exception as e:
         return str(e)

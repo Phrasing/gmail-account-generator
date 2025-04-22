@@ -434,7 +434,7 @@ async def create_gmail_account(email_to_create, recovery_email, first_name, last
     finally:
         try:
             await tab.close()
-            await browser.close()
+            await browser.stop()
         except:
             pass
 

@@ -2,6 +2,8 @@ import os
 import asyncio
 import requests
 import random
+import json
+import zipfile
 import datetime
 import names
 import csv
@@ -19,7 +21,70 @@ DAISY_SERVICE = os.getenv("DAISY_SERVICE", "service_code_here")
 DELAY_FACTOR = float(os.getenv("DELAY_FACTOR", "1.0"))
 CATCHALL_DOMAIN = os.getenv("CATCHALL_DOMAIN")
 RECOVERY_EMAIL = os.getenv("RECOVERY_EMAIL")
-CREATION_DELAY = float(os.getenv("CREATION_DELAY", "30"))  # time between account creations in seconds
+
+def get_random_proxy(file="proxies.txt"):
+    try:
+        with open(file, "r") as pf:
+            lines = [l.strip() for l in pf if l.strip()]
+        return random.choice(lines) if lines else None
+    except Exception:
+        return None
+
+def make_proxy_auth_extension(proxy_host, proxy_port, username, password, plugin_path):
+    if os.path.exists(plugin_path):
+      os.remove(plugin_path)
+
+    manifest = {
+        "version": "1.0.0",
+        "manifest_version": 2,
+        "name": "Proxy Auth Extension",
+        "permissions": [
+            "proxy",
+            "tabs",
+            "unlimitedStorage",
+            "storage",
+            "<all_urls>",
+            "webRequest",
+            "webRequestBlocking",
+        ],
+        "background": {"scripts": ["background.js"]},
+        "minimum_chrome_version": "22.0.0",
+    }
+
+    background_js = f"""
+var config = {{
+    mode: "fixed_servers",
+    rules: {{
+        singleProxy: {{
+            scheme: "http",
+            host: "{proxy_host}",
+            port: parseInt({proxy_port})
+        }},
+        bypassList: ["localhost"]
+    }}
+}};
+chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{}});
+
+function callbackFn(details) {{
+    return {{
+        authCredentials: {{
+            username: "{username}",
+            password: "{password}"
+        }}
+    }};
+}}
+
+chrome.webRequest.onAuthRequired.addListener(
+    callbackFn,
+    {{urls: ["<all_urls>"]}},
+    ['blocking']
+);
+"""
+
+    # write out the zip
+    with zipfile.ZipFile(plugin_path, "w") as zp:
+        zp.writestr("manifest.json", json.dumps(manifest, indent=2))
+        zp.writestr("background.js", background_js)
 
 
 async def apply_delay(duration):
@@ -134,32 +199,21 @@ async def safe_type(el, text, name):
     await random_sleep(0.05, 0.2)
 
 
-async def start_browser_with_proxy(headless=False):
-    proxy_line = get_random_proxy()
-    args = []
-    
-    if proxy_line:
-        host, port, user, pwd = proxy_line.split(":", 3)
-        from urllib.parse import quote_plus
-        proxy_url = f"http://{user}:{quote_plus(pwd)}@{host}:{port}"
-        args.append(f"--proxy-server={proxy_url}")
-        logger.info(f"Using proxy {host}:{port}")
-    else:
-        logger.info("No proxy found in proxies.txt")
+async def start_browser_with_proxy():
+    proxy = get_random_proxy()
 
+    if proxy:
+        host, port, user, pwd = proxy.split(":", 3)
+        from urllib.parse import quote_plus
+        plugin_file = os.path.abspath("proxy_auth_plugin.zip")
+        print(plugin_file)
+        make_proxy_auth_extension(host, port, user, pwd, plugin_file)
+       
     config = uc.Config()
-    config.headless = headless
-    
-    # Use Brave if available
-    brave_path = os.getenv("BRAVE_PATH", r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe")
-    if os.path.exists(brave_path):
-        config.browser_executable_path = brave_path
-    else:
-        logger.info(f"Brave binary not found at {brave_path}, using default browser")
-        
-    if args:
-        config.args = args
-        
+    config.headless = False
+    config.browser_executable_path = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
+    config.add_extension(plugin_file)
+
     return await uc.start(config=config)
 
 
@@ -192,7 +246,7 @@ async def fill_name(tab, first, last):
 
 
 async def fill_dob_gender(tab):
-    await random_sleep(2, 5)
+    await random_sleep(2, 10 )
     
     # Generate random birth date (18-50 years old)
     month = random.randint(1, 12)
@@ -204,7 +258,7 @@ async def fill_dob_gender(tab):
         f"(sel => {{ sel.value = '{month}'; sel.dispatchEvent(new Event('change', {{ bubbles: true }})); }})(document.querySelector('select#month'));"
     )
     await random_sleep()
-    
+
     # Day field
     day_input = await safe_select(tab, "input#day", "fill_dob_gender day")
     await safe_click(day_input, "fill_dob_gender day click")
@@ -401,12 +455,13 @@ async def accept_terms(tab):
 
 async def create_gmail_account(email_to_create, recovery_email, first_name, last_name, password):
     logger.info(f"[create] Starting account creation for {email_to_create}")
-    browser = await start_browser_with_proxy(headless=False)
+    browser = await start_browser_with_proxy()
     tab = await browser.get("https://accounts.google.com/signup")
     
     try:
         logger.info("fill_name")
         await fill_name(tab, first_name, last_name)
+        
         
         logger.info("fill_dob_gender")
         await fill_dob_gender(tab)
@@ -425,8 +480,8 @@ async def create_gmail_account(email_to_create, recovery_email, first_name, last
         
         logger.info("accept_terms")
         await accept_terms(tab)
-
-        await apply_delay(CREATION_DELAY)
+        
+        await apply_delay(15)
         
         return "success"
     except Exception as e:
